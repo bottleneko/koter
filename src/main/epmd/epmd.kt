@@ -1,5 +1,16 @@
 package epmd
 
+import io.ktor.network.sockets.aSocket
+import io.ktor.network.sockets.openReadChannel
+import io.ktor.network.sockets.openWriteChannel
+
+import io.ktor.network.selector.*
+
+import kotlinx.coroutines.*
+
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+
 enum class EpmdProto(val opcode: Byte) {
     ALIVE2_REQ(120),
     ALIVE2_RESP(121),
@@ -58,5 +69,31 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
 }
 
 fun main(args: Array<String>) {
-    println("Hello world ${EpmdProto.ALIVE2_REQ.opcode}")
+    runBlocking {
+        val server = aSocket(ActorSelectorManager(Dispatchers.IO)).tcp().bind(InetSocketAddress("127.0.0.1", 2323))
+        println("Started echo telnet server at ${server.localAddress}")
+
+        while (true) {
+            val socket = server.accept()
+
+            launch {
+                println("Socket accepted: ${socket.remoteAddress}")
+
+                val input = socket.openReadChannel()
+                val output = socket.openWriteChannel(autoFlush = true)
+
+                try {
+                    while (true) {
+                        val line = input.readUTF8Line(255)
+
+                        println("${socket.remoteAddress}: $line")
+                        output.writeFully(ByteBuffer.wrap("$line\r\n".toByteArray()))
+                    }
+                } catch (e: Throwable) {
+                    e.printStackTrace()
+                    socket.close()
+                }
+            }
+        }
+    }
 }
