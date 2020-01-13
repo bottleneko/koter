@@ -47,7 +47,11 @@
                 <groupId>org.jetbrains.kotlin</groupId>
                 <version>${kotlin.version}</version>
 
-                <configuration/>
+                <configuration>
+                    <args>
+                        <arg>-Xuse-experimental=kotlin.Experimental</arg>
+                    </args>
+                </configuration>
                 <executions>
                     <execution>
                         <id>compile</id>
