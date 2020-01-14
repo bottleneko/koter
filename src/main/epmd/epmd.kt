@@ -1,15 +1,17 @@
 package epmd
 
-import io.ktor.network.sockets.aSocket
-import io.ktor.network.sockets.openReadChannel
-import io.ktor.network.sockets.openWriteChannel
-
-import io.ktor.network.selector.*
-
-import kotlinx.coroutines.*
-
 import java.net.InetSocketAddress
+
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.Socket
+
+import java.util.Scanner
+
+import kotlin.concurrent.thread
 
 enum class EpmdProto(val opcode: Byte) {
     ALIVE2_REQ(120),
@@ -22,7 +24,12 @@ enum class EpmdProto(val opcode: Byte) {
 
     DUMP_REQ(100),
     KILL_REQ(107),
-    STOP_REQ(115)
+    STOP_REQ(115);
+
+    companion object {
+        private val map = EpmdProto.values().associateBy(EpmdProto::opcode)
+        fun fromOpcode(opcode: Byte) = map[opcode]
+    }
 }
 
 @UseExperimental(kotlin.ExperimentalUnsignedTypes::class)
@@ -42,7 +49,7 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
     val highVsn: UShort
     val lowVsn: UShort
     val extra: Array<Byte>
-    val creation: UShort
+    var creation: UShort
 
     init {
         val ns = name.split("@")
@@ -66,34 +73,86 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
         extra = arrayOf()
         creation = 0u
     }
+
+
+    fun compose_ALIVE2_Req(): ByteBuffer {
+        // https://erlang.org/doc/apps/erts/erl_dist_protocol.html#register-a-node-in-epmd
+        // Table 14.2
+        val request = ByteBuffer.allocate(2 + 13 + name.length + extra.size)
+            .putShort((13 + name.length + extra.size).toShort())
+            .put(EpmdProto.ALIVE2_REQ.opcode.toByte())
+
+            .putShort(this.port.toShort())
+
+            .put(this.type.toByte())
+            .put(this.protocol.toByte())
+            .putShort(this.highVsn.toShort())
+            .putShort(this.lowVsn.toShort())
+
+            .putShort(this.name.length.toShort())
+            .put(ByteBuffer.wrap(this.name.toByteArray()))
+
+            .putShort(this.extra.size.toShort())
+            .put(ByteBuffer.wrap(this.extra.toByteArray()))
+
+        return request
+    }
+
+    fun connect() {
+
+    }
 }
 
 fun main(args: Array<String>) {
-    runBlocking {
-        val server = aSocket(ActorSelectorManager(Dispatchers.IO)).tcp().bind(InetSocketAddress("127.0.0.1", 2323))
-        println("Started echo telnet server at ${server.localAddress}")
+    val epmd = Epmd("test3@localhost", 30000u, 4369u, true)
 
-        while (true) {
-            val socket = server.accept()
+    val connection = Socket("127.0.0.1", 4369)
+    val reader: InputStream = connection.getInputStream()
+    val writer: OutputStream = connection.getOutputStream()
 
-            launch {
-                println("Socket accepted: ${socket.remoteAddress}")
+    writer.write(epmd.compose_ALIVE2_Req().array())
+    writer.flush()
 
-                val input = socket.openReadChannel()
-                val output = socket.openWriteChannel(autoFlush = true)
+    println("1")
 
-                try {
-                    while (true) {
-                        val line = input.readUTF8Line(255)
+    var byteBuffer = ByteBuffer.wrap(bufferedRead(4, reader))
+    val aliveResp = byteBuffer.get()
+    val result = byteBuffer.get().toUByte()
+    val creation = byteBuffer.getShort().toUShort()
 
-                        println("${socket.remoteAddress}: $line")
-                        output.writeFully(ByteBuffer.wrap("$line\r\n".toByteArray()))
-                    }
-                } catch (e: Throwable) {
-                    e.printStackTrace()
-                    socket.close()
-                }
+    if(aliveResp != EpmdProto.ALIVE2_RESP.opcode) {
+        throw Exception("Malformed EPMD reply")
+    }
+
+    if(result != 0u.toUByte()) {
+        throw Exception("EPMD cannot allocate port")
+    }
+
+    if(creation == 0u.toUShort()) {
+        throw Exception("Duplicate name ${epmd.name}")
+    }
+
+    epmd.creation = creation
+
+    println("${EpmdProto.fromOpcode(aliveResp)} ${result} ${creation}")
+}
+
+
+fun bufferedRead(bytes: Int, input : InputStream): ByteArray {
+    var buf = ByteArray(1024)
+    fun bufferedRead(bytes: Int, buf: ByteArray): Int =
+        when {
+            bytes < 0  -> -1
+            bytes == 0 -> 0
+            else       -> {
+                val bytesReaded = input.read(buf)
+                bufferedRead(bytes - bytesReaded, buf)
             }
         }
+
+    if (bufferedRead(bytes, buf) == 0) {
+        return ByteArray(bytes, { buf.get(it) })
+    } else {
+        return ByteArray(0)
     }
 }
