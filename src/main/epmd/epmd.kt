@@ -99,48 +99,60 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
     }
 
     fun connect() {
+        thread {
+            while(true) {
+                // FIXME: Не сработает, если EPMD слушает по другому loopback адресу
+                val connection = Socket("127.0.0.1", 4369)
+                val reader: InputStream = connection.getInputStream()
+                val writer: OutputStream = connection.getOutputStream()
 
+                while(true) {
+                    writer.write(compose_ALIVE2_Req().array())
+                    writer.flush()
+
+                    println("1")
+
+                    var byteBuffer = ByteBuffer.wrap(bufferedRead(4, reader))
+
+                    if(byteBuffer.array().size != 4) {
+                        println("EPMD close connection")
+                        break
+                    }
+
+                    val aliveResp = byteBuffer.get()
+                    val result = byteBuffer.get().toUByte()
+                    val creation = byteBuffer.getShort().toUShort()
+
+                    if(aliveResp != EpmdProto.ALIVE2_RESP.opcode) {
+                        throw Exception("Malformed EPMD reply")
+                    }
+
+                    if(result != 0u.toUByte()) {
+                        throw Exception("EPMD cannot allocate port")
+                    }
+
+                    if(creation == 0u.toUShort()) {
+                        throw Exception("Duplicate name ${name}")
+                    }
+
+                    this.creation = creation
+
+                    println("${EpmdProto.fromOpcode(aliveResp)} ${result} ${creation}")
+                }
+            }
+        }
     }
 }
 
 fun main(args: Array<String>) {
     val epmd = Epmd("test3@localhost", 30000u, 4369u, true)
-
-    val connection = Socket("127.0.0.1", 4369)
-    val reader: InputStream = connection.getInputStream()
-    val writer: OutputStream = connection.getOutputStream()
-
-    writer.write(epmd.compose_ALIVE2_Req().array())
-    writer.flush()
-
-    println("1")
-
-    var byteBuffer = ByteBuffer.wrap(bufferedRead(4, reader))
-    val aliveResp = byteBuffer.get()
-    val result = byteBuffer.get().toUByte()
-    val creation = byteBuffer.getShort().toUShort()
-
-    if(aliveResp != EpmdProto.ALIVE2_RESP.opcode) {
-        throw Exception("Malformed EPMD reply")
-    }
-
-    if(result != 0u.toUByte()) {
-        throw Exception("EPMD cannot allocate port")
-    }
-
-    if(creation == 0u.toUShort()) {
-        throw Exception("Duplicate name ${epmd.name}")
-    }
-
-    epmd.creation = creation
-
-    println("${EpmdProto.fromOpcode(aliveResp)} ${result} ${creation}")
+    epmd.connect()
 }
 
 
 fun bufferedRead(bytes: Int, input : InputStream): ByteArray {
     var buf = ByteArray(1024)
-    fun bufferedRead(bytes: Int, buf: ByteArray): Int =
+    tailrec fun bufferedRead(bytes: Int, buf: ByteArray): Int =
         when {
             bytes < 0  -> -1
             bytes == 0 -> 0
