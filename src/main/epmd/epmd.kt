@@ -48,12 +48,13 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
     val protocol: UByte
     val highVsn: UShort
     val lowVsn: UShort
-    val extra: Array<Byte>
+    val extra: ByteArray
     var creation: UShort
 
     init {
         val ns = name.split("@")
 	      if (ns.size != 2) {
+            // TODO: отдельный класс исключений
 		        throw Exception("FQDN for node name is required (example: node@hostname)")
 	      }
 
@@ -70,7 +71,7 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
         protocol = 0u
         highVsn = 5u
         lowVsn = 5u
-        extra = arrayOf()
+        extra = ByteArray(0)
         creation = 0u
     }
 
@@ -78,9 +79,10 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
     fun compose_ALIVE2_Req(): ByteBuffer {
         // https://erlang.org/doc/apps/erts/erl_dist_protocol.html#register-a-node-in-epmd
         // Table 14.2
-        val request = ByteBuffer.allocate(2 + 13 + name.length + extra.size)
+        return ByteBuffer.allocate(2 + 13 + name.length + extra.size)
             .putShort((13 + name.length + extra.size).toShort())
-            .put(EpmdProto.ALIVE2_REQ.opcode.toByte())
+
+            .put(EpmdProto.ALIVE2_REQ.opcode)
 
             .putShort(this.port.toShort())
 
@@ -94,15 +96,57 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
 
             .putShort(this.extra.size.toShort())
             .put(ByteBuffer.wrap(this.extra.toByteArray()))
+    }
 
-        return request
+    fun compose_PLEASE_PORT2_Req(shortName: String): ByteBuffer {
+        // https://erlang.org/doc/apps/erts/erl_dist_protocol.html#get-the-distribution-port-of-another-node
+        // Table 14.4
+        return ByteBuffer.allocate(2 + 1 + name.length)
+            .putShort((1 + name.length).toShort())
+
+            .put(EpmdProto.PORT_PREASE2_REQ.opcode)
+            .put(ByteBuffer.wrap(shortName.toByteArray()))
+    }
+
+    fun resolveName(name: String): UShort {
+        val ns = name.split("@")
+
+        // TODO: проверка что соединение установлено
+        val connection = Socket(ns[1], portEpmd.toInt())
+        val reader: InputStream = connection.getInputStream()
+        val writer: OutputStream = connection.getOutputStream()
+
+        writer.write(compose_PLEASE_PORT2_Req(ns[0]).array())
+        writer.flush()
+
+        var buf = ByteArray(1024)
+        reader.read(buf)
+
+        var byteBuffer = ByteBuffer.wrap(buf)
+
+        if(byteBuffer.get() != EpmdProto.PORT2_RESP.opcode) {
+            // TODO: отдельный класс исключений
+            throw Exception("Malformed EPMD reply")
+        }
+
+        val result = byteBuffer.get()
+
+        if(result != 0u.toByte()) {
+            // TODO: отдельный класс исключений
+            throw Exception("EPMD cannot resolve name")
+        }
+
+        val port = byteBuffer.getShort().toUShort()
+
+        return port
     }
 
     fun connect() {
         thread {
             while(true) {
                 // FIXME: Не сработает, если EPMD слушает по другому loopback адресу
-                val connection = Socket("127.0.0.1", 4369)
+                // TODO: проверка что соединение установлено
+                val connection = Socket("127.0.0.1", portEpmd.toInt())
                 val reader: InputStream = connection.getInputStream()
                 val writer: OutputStream = connection.getOutputStream()
 
@@ -110,34 +154,36 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
                     writer.write(compose_ALIVE2_Req().array())
                     writer.flush()
 
-                    println("1")
-
                     var byteBuffer = ByteBuffer.wrap(bufferedRead(4, reader))
 
                     if(byteBuffer.array().size != 4) {
+                        // TODO: логгер на уровень debug
                         println("EPMD close connection")
                         break
                     }
 
-                    val aliveResp = byteBuffer.get()
-                    val result = byteBuffer.get().toUByte()
-                    val creation = byteBuffer.getShort().toUShort()
-
-                    if(aliveResp != EpmdProto.ALIVE2_RESP.opcode) {
+                    if(byteBuffer.get() != EpmdProto.ALIVE2_RESP.opcode) {
+                        // TODO: отдельный класс исключений
                         throw Exception("Malformed EPMD reply")
                     }
 
+                    val result = byteBuffer.get().toUByte()
+                    val creation = byteBuffer.getShort().toUShort()
+
                     if(result != 0u.toUByte()) {
+                        // TODO: отдельный класс исключений
                         throw Exception("EPMD cannot allocate port")
                     }
 
                     if(creation == 0u.toUShort()) {
+                        // TODO: отдельный класс исключений
                         throw Exception("Duplicate name ${name}")
                     }
 
                     this.creation = creation
 
-                    println("${EpmdProto.fromOpcode(aliveResp)} ${result} ${creation}")
+                    // TODO: логгер на уровень debug
+                    println("EPMD ALIVE2_RESP: ${result} ${creation}")
                 }
             }
         }
@@ -147,6 +193,8 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
 fun main(args: Array<String>) {
     val epmd = Epmd("test3@localhost", 30000u, 4369u, true)
     epmd.connect()
+
+    println(epmd.resolveName("test@localhost"))
 }
 
 
