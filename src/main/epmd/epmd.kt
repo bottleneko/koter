@@ -95,7 +95,7 @@ class Epmd(name: String, listenPort: UShort, epmdPort: UShort, hidden: Boolean =
             .put(ByteBuffer.wrap(this.name.toByteArray()))
 
             .putShort(this.extra.size.toShort())
-            .put(ByteBuffer.wrap(this.extra.toByteArray()))
+            .put(ByteBuffer.wrap(this.extra))
     }
 
     fun compose_PLEASE_PORT2_Req(shortName: String): ByteBuffer {

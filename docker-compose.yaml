@@ -1,0 +1,23 @@
+version: "3.7"
+
+services:
+  workspace:
+    build:
+      context: docker/
+      args:
+        BASE_IMAGE: maven:3.6.3-jdk-11-openj9
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-100}
+    network_mode: host
+    init: true
+    entrypoint: sleep infinity
+    working_dir: /app
+    volumes:
+      - ./.m2:/home/workspace/.m2:Z
+      - .:/app:Z
+
+  epmd:
+    image: erlang:22.2.2
+    init: true
+    command: sleep infinity
+    network_mode: host
